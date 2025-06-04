@@ -26,8 +26,8 @@ if (!fs.existsSync('cookies.txt')) {
   console.log('✅ cookies.txt is present in container');
 }
 
-  // Use --get-url instead of downloading
-  let cmd = `yt-dlp --no-playlist --no-warnings -f best --get-url "${url}"`;
+
+  let cmd = `yt-dlp --no-playlist --no-warnings -f best --cookies cookies.txt --get-url "${url}"`;
 
   // Custom headers for Instagram and TikTok
   if (url.includes('tiktok.com')) {
