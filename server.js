@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
+const fs = require('fs');
 
 const app = express();
 app.use(cors());
@@ -19,8 +20,14 @@ app.post('/extract', (req, res) => {
 
   console.log(`📥 Received request to extract: ${url}`);
 
+if (!fs.existsSync('cookies.txt')) {
+  console.warn('⚠️ cookies.txt not found in container!');
+} else {
+  console.log('✅ cookies.txt is present in container');
+}
+
   // Use --get-url instead of downloading
-  let cmd = `yt-dlp --no-playlist --no-warnings -f best --cookies cookies.txt --get-url "${url}"`;
+  let cmd = `yt-dlp --no-playlist --no-warnings -f best --get-url "${url}"`;
 
   // Custom headers for Instagram and TikTok
   if (url.includes('tiktok.com')) {
