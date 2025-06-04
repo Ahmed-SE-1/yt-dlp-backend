@@ -20,7 +20,7 @@ app.post('/extract', (req, res) => {
   console.log(`📥 Received request to extract: ${url}`);
 
   // Use --get-url instead of downloading
-  let cmd = `yt-dlp --no-playlist --no-warnings -f best --get-url "${url}"`;
+  let cmd = `yt-dlp --no-playlist --no-warnings -f best --cookies cookies.txt --get-url "${url}"`;
 
   // Custom headers for Instagram and TikTok
   if (url.includes('tiktok.com')) {
