@@ -69,14 +69,15 @@ app.post('/extract', async (req, res) => {
         const directUrl = urls[0];
         console.log(`✅ Extracted direct URL: ${directUrl}`);
         
-        // Additional TikTok validation
-        if (url.includes('tiktok.com') && !directUrl.includes('.mp4')) {
-          return reject(new Error('Invalid TikTok video format'));
+        // Original TikTok validation (URL check only)
+        if (url.includes('tiktok.com') && !isValidUrl(directUrl)) {
+          return reject(new Error('Invalid TikTok video URL'));
         }
 
         resolve({ 
           success: true, 
-          url: directUrl 
+          url: directUrl,
+          isTikTok: url.includes('tiktok.com') // Maintain original response structure
         });
       });
     });
@@ -106,6 +107,16 @@ app.post('/extract', async (req, res) => {
     });
   }
 });
+
+// Helper function to validate URLs without checking extension
+function isValidUrl(url) {
+  try {
+    new URL(url);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
 
 // Error handling middleware
 app.use((err, req, res, next) => {
