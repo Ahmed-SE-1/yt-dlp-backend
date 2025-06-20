@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
@@ -16,6 +17,9 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// Serve downloaded videos
+app.use('/downloads', express.static(path.join(__dirname, 'downloads')));
 
 // Enhanced health check endpoint
 app.get('/health', (req, res) => {
@@ -46,7 +50,7 @@ app.post('/extract', async (req, res) => {
   try {
     const timeoutMs = isTikTok ? 30000 : 20000; // Longer timeout for TikTok
     const result = await Promise.race([
-      extractVideoUrl(url, isTikTok),
+      extractVideoUrl(url, isTikTok, req),
       timeout(timeoutMs, 'Processing timeout exceeded')
     ]);
 
@@ -57,43 +61,34 @@ app.post('/extract', async (req, res) => {
 });
 
 // Helper functions
-async function extractVideoUrl(url, isTikTok) {
-  let cmd = `yt-dlp --no-playlist --no-warnings -f best --cookies cookies.txt --get-url "${url}"`;
+async function extractVideoUrl(url, isTikTok, req) {
+  const timestamp = Date.now();
+  const outputPath = `downloads/video_${timestamp}.mp4`;
+
+  let cmd = `yt-dlp -f best --recode-video mp4 -o "${outputPath}" --no-check-certificate`;
 
   if (isTikTok) {
     cmd += ` --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"`;
     cmd += ` --add-header "Referer: https://www.tiktok.com/"`;
-    cmd += ` --add-header "Origin: https://www.tiktok.com"`;
-    cmd += ` --format mp4 --force-generic-extractor`;
-  } 
-  else if (url.includes('instagram.com')) {
-    cmd += ` --add-header "User-Agent: Mozilla/5.0" --add-header "Referer: https://www.instagram.com/"`;
   }
 
-  const { stdout } = await execAsync(cmd);
-  const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
+  cmd += ` "${url}"`;
 
-  if (urls.length === 0) {
-    throw new Error('No downloadable video found');
-  }
+  await execAsync(cmd);
 
-  const directUrl = urls[0];
-  console.log(`✅ Extracted direct URL: ${directUrl}`);
-  
-  if (isTikTok && !isValidUrl(directUrl)) {
-    throw new Error('Invalid TikTok video URL');
-  }
+  const fileUrl = `http://${req.headers.host}/${outputPath.replace(/\\/g, '/')}`;
+  console.log(`✅ Video downloaded and available at: ${fileUrl}`);
 
-  return { 
-    success: true, 
-    url: directUrl,
+  return {
+    success: true,
+    url: fileUrl,
     isTikTok: isTikTok
   };
 }
 
 function handleExtractionError(error, res, isTikTok) {
   console.error('Extraction failed:', error.message);
-  
+
   if (isTikTok && error.message.includes('timeout')) {
     return res.status(504).json({
       success: false,
@@ -101,7 +96,7 @@ function handleExtractionError(error, res, isTikTok) {
       error: error.message
     });
   }
-  
+
   res.status(500).json({
     success: false,
     message: error.message.includes('No downloadable') 
