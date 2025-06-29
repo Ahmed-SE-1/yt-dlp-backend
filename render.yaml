@@ -1,9 +1,7 @@
 services:
   - type: web
-    name: video-extractor
-    env: node
-    buildCommand: npm install
-    startCommand: node server.js
-    envVars:
-      - key: PORT
-        value: 3000
+    name: vf-dip-backend
+    env: docker
+    plan: free
+    docker:
+      buildTimeout: 1800
