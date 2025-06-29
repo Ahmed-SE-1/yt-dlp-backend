@@ -1,46 +1,30 @@
-# Multi-stage build for smaller final image
-# Stage 1: Builder for Node.js dependencies
-FROM node:18-slim as builder
-
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-
-# Stage 2: Runtime image with Python, yt-dlp and ffmpeg
+# Use Python as base for yt-dlp, with ffmpeg and Node.js
 FROM python:3.10-slim
 
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# Install dependencies for Node.js, ffmpeg, yt-dlp
+RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
-    ca-certificates && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    gnupg \
+    ca-certificates \
+    build-essential && \
+    pip install --no-cache-dir yt-dlp
 
-# Install yt-dlp (latest stable release)
-RUN pip install --no-cache-dir yt-dlp && \
-    yt-dlp --version
+# Install Node.js 18
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs
 
-# Copy Node.js dependencies from builder
-COPY --from=builder /app/node_modules /app/node_modules
-
-# Copy application files
+# Set working directory
 WORKDIR /app
+
+# Copy project files
 COPY . .
 
-# Environment variables
-ENV NODE_ENV=production
-ENV PORT=3000
-EXPOSE $PORT
+# Install Node.js dependencies
+RUN npm install
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:$PORT/health || exit 1
+# Expose port expected by Railway
+EXPOSE 3000
 
-# Run as non-root user
-RUN useradd -m appuser && chown -R appuser /app
-USER appuser
-
-# Start command
+# Start the app
 CMD ["node", "server.js"]
