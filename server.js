@@ -18,8 +18,14 @@ app.use((req, res, next) => {
   next();
 });
 
+// Ensure downloads directory exists
+const downloadsDir = path.join(__dirname, 'downloads');
+if (!fs.existsSync(downloadsDir)) {
+  fs.mkdirSync(downloadsDir, { recursive: true });
+}
+
 // Serve downloaded videos
-app.use('/downloads', express.static(path.join(__dirname, 'downloads')));
+app.use('/downloads', express.static(downloadsDir));
 
 // Enhanced health check endpoint
 app.get('/health', (req, res) => {
@@ -28,7 +34,10 @@ app.get('/health', (req, res) => {
     memory: process.memoryUsage(),
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
-    load: process.cpuUsage()
+    load: process.cpuUsage(),
+    disk: {
+      downloads: fs.readdirSync(downloadsDir).length
+    }
   };
   res.status(200).json(healthCheck);
 });
@@ -37,72 +46,129 @@ app.get('/health', (req, res) => {
 app.post('/extract', async (req, res) => {
   const { url } = req.body;
 
-  if (!url) {
+  if (!url || !isValidUrl(url)) {
     return res.status(400).json({ 
       success: false, 
-      message: 'URL is required' 
+      message: 'Valid URL is required' 
     });
   }
 
   console.log(`📥 Processing URL: ${url}`);
-  const isTikTok = url.includes('tiktok.com');
+  const platform = getPlatform(url);
 
   try {
-    const timeoutMs = isTikTok ? 30000 : 20000; // Longer timeout for TikTok
+    const timeoutMs = getTimeoutForPlatform(platform);
     const result = await Promise.race([
-      extractVideoUrl(url, isTikTok, req),
+      extractVideoUrl(url, platform, req),
       timeout(timeoutMs, 'Processing timeout exceeded')
     ]);
 
     res.json(result);
   } catch (error) {
-    handleExtractionError(error, res, isTikTok);
+    handleExtractionError(error, res, platform);
   }
 });
 
 // Helper functions
-async function extractVideoUrl(url, isTikTok, req) {
+function getPlatform(url) {
+  if (url.includes('tiktok.com')) return 'tiktok';
+  if (url.includes('youtube.com') || url.includes('youtu.be')) return 'youtube';
+  if (url.includes('instagram.com')) return 'instagram';
+  return 'unknown';
+}
+
+function getTimeoutForPlatform(platform) {
+  const timeouts = {
+    'tiktok': 30000,
+    'youtube': 45000,
+    'instagram': 35000,
+    'default': 20000
+  };
+  return timeouts[platform] || timeouts.default;
+}
+
+async function extractVideoUrl(url, platform, req) {
   const timestamp = Date.now();
-  const outputPath = `downloads/video_${timestamp}.mp4`;
+  const filename = `video_${timestamp}.mp4`;
+  const outputPath = path.join(downloadsDir, filename);
 
-  let cmd = `yt-dlp -f best --recode-video mp4 -o "${outputPath}" --no-check-certificate`;
+  let cmd = `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${outputPath}"`;
 
-  if (isTikTok) {
-    cmd += ` --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"`;
-    cmd += ` --add-header "Referer: https://www.tiktok.com/"`;
+  // Platform-specific configurations
+  switch (platform) {
+    case 'tiktok':
+      cmd += ` --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"`;
+      cmd += ` --add-header "Referer: https://www.tiktok.com/"`;
+      break;
+    case 'youtube':
+      cmd += ` --cookies-from-browser chrome`;
+      cmd += ` --geo-bypass`;
+      cmd += ` --embed-metadata`;
+      cmd += ` --no-check-certificate`;
+      break;
+    case 'instagram':
+      cmd += ` --add-header "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"`;
+      break;
+    default:
+      cmd += ` --no-check-certificate`;
   }
 
   cmd += ` "${url}"`;
 
+  console.log(`Executing command: ${cmd}`);
   await execAsync(cmd);
 
-  const fileUrl = `http://${req.headers.host}/${outputPath.replace(/\\/g, '/')}`;
+  if (!fs.existsSync(outputPath)) {
+    throw new Error('Downloaded file not found');
+  }
+
+  const fileUrl = `${req.protocol}://${req.get('host')}/downloads/${filename}`;
   console.log(`✅ Video downloaded and available at: ${fileUrl}`);
 
   return {
     success: true,
     url: fileUrl,
-    isTikTok: isTikTok
+    platform,
+    filename,
+    size: fs.statSync(outputPath).size
   };
 }
 
-function handleExtractionError(error, res, isTikTok) {
+function handleExtractionError(error, res, platform) {
   console.error('Extraction failed:', error.message);
 
-  if (isTikTok && error.message.includes('timeout')) {
-    return res.status(504).json({
-      success: false,
-      message: 'TikTok processing timeout. Please try again.',
-      error: error.message
-    });
-  }
+  const errorMap = {
+    'timeout': {
+      status: 504,
+      message: `${platform.charAt(0).toUpperCase() + platform.slice(1)} processing timeout. Please try again.`
+    },
+    'No downloadable': {
+      status: 404,
+      message: 'No video found at this URL'
+    },
+    'Unsupported URL': {
+      status: 400,
+      message: 'Unsupported video platform'
+    },
+    'file not found': {
+      status: 500,
+      message: 'Video downloaded but file could not be accessed'
+    },
+    'default': {
+      status: 500,
+      message: 'Video extraction failed'
+    }
+  };
 
-  res.status(500).json({
+  const matchedError = Object.entries(errorMap).find(([key]) => 
+    error.message.includes(key)
+  ) || ['default', errorMap.default];
+
+  res.status(matchedError[1].status).json({
     success: false,
-    message: error.message.includes('No downloadable') 
-      ? 'No video found at this URL' 
-      : 'Video extraction failed',
-    error: error.message
+    message: matchedError[1].message,
+    error: error.message,
+    platform
   });
 }
 
@@ -116,8 +182,11 @@ function execAsync(cmd) {
   return new Promise((resolve, reject) => {
     exec(cmd, (error, stdout, stderr) => {
       if (error) {
-        reject(new Error(stderr || error.message));
+        const errorMsg = stderr || error.message;
+        console.error(`Command error: ${errorMsg}`);
+        reject(new Error(errorMsg));
       } else {
+        console.log(`Command output: ${stdout}`);
         resolve({ stdout });
       }
     });
@@ -131,6 +200,21 @@ function isValidUrl(url) {
   } catch (e) {
     return false;
   }
+}
+
+// Cleanup old files (optional)
+function cleanupOldFiles() {
+  const now = Date.now();
+  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+
+  fs.readdirSync(downloadsDir).forEach(file => {
+    const filePath = path.join(downloadsDir, file);
+    const stat = fs.statSync(filePath);
+    if (now - stat.mtimeMs > maxAge) {
+      fs.unlinkSync(filePath);
+      console.log(`Deleted old file: ${file}`);
+    }
+  });
 }
 
 // Error handling middleware
@@ -155,12 +239,15 @@ process.on('unhandledRejection', (err) => {
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
+  cleanupOldFiles();
+  // Schedule regular cleanup
+  setInterval(cleanupOldFiles, 6 * 60 * 60 * 1000); // Every 6 hours
 });
 
 // Timeout settings
-server.timeout = 30000;
-server.keepAliveTimeout = 25000;
-server.headersTimeout = 26000;
+server.timeout = 60000;
+server.keepAliveTimeout = 55000;
+server.headersTimeout = 56000;
 
 // Performance monitoring
 setInterval(() => {
@@ -168,6 +255,7 @@ setInterval(() => {
     timestamp: new Date().toISOString(),
     memory: process.memoryUsage(),
     cpu: process.cpuUsage(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    downloadsCount: fs.readdirSync(downloadsDir).length
   });
 }, 60000); // Every 60 seconds
