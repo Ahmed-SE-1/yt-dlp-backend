@@ -101,7 +101,6 @@ async function extractVideoUrl(url, platform, req) {
       cmd += ` --add-header "Referer: https://www.tiktok.com/"`;
       break;
     case 'youtube':
-      cmd += ` --cookies-from-browser chrome`;
       cmd += ` --geo-bypass`;
       cmd += ` --embed-metadata`;
       cmd += ` --no-check-certificate`;
